@@ -150,20 +150,29 @@
 
 class OSHU_PN532_I2C {
 	public:
-					OSHU_PN532_I2C(uint8_t pin_irq, uint8_t pin_reset);
-		boolean		init(void);
+							OSHU_PN532_I2C(uint8_t pin_irq, uint8_t pin_reset, bool irqmode = false);
+		bool				init( void );
 		//TODO: bool	 	checkForEZLink(uint8_t * ezlink, float * balance);
-		//bool	 	checkForEZLink_Transparent(uint8_t * ezlink, float * balance);
-		boolean	 	checkForEZLink_NonBlocking(uint8_t * ezlink, float * balance);
-		boolean		sendCommandCheckAck(uint8_t *cmd, uint8_t cmdlen, uint16_t timeout = 1000);
+		//bool	 			checkForEZLink_Transparent(uint8_t * ezlink, float * balance);
+		bool	 			checkForEZLink_NonBlocking(uint8_t * ezlink, float * balance);
+		bool				sendCommandCheckAck(uint8_t *cmd, uint8_t cmdlen, uint16_t timeout = 1000);
+		
+		//volatile bool		ezLinkAvailable;
+		//bool				getEZLink(uint8_t * ezlink);
 
 	private:
-		uint8_t 	_irq, _reset;
-		boolean		readackframe(void);
-		uint8_t		wirereadstatus(void);
-		void		wirereaddata(uint8_t* buff, uint8_t n);
-		void		wiresendcommand(uint8_t* cmd, uint8_t cmdlen);
-		boolean 	waitUntilReady(uint16_t timeout);
+		uint8_t 			_irq, _reset;
+		bool				_irqmode;
+		bool				readackframe( void );
+		uint8_t				wirereadstatus( void );
+		void				wirereaddata( uint8_t* buff, uint8_t n );
+		void				wiresendcommand( uint8_t* cmd, uint8_t cmdlen );
+		bool 				waitUntilReady( uint16_t timeout );
+
+		// bool				setupIRQMode( void );
+		bool				setupPN532ToDetectEZLinkCards( void );
+		bool				checkResponse( uint8_t expectedresponse, uint8_t extraparam = 0x00 );
+		bool				readEZLink(uint8_t * ezlink, float * balance);
 };
 
 #endif

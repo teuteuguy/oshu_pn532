@@ -36,7 +36,9 @@ byte oshu_pn532response_firmwarevers[] = {0x00, 0xFF, 0x06, 0xFA, 0xD5, 0x03};
 #define OSHU_PN532_PACKBUFFSIZE 64
 byte oshu_pn532_packetbuffer[OSHU_PN532_PACKBUFFSIZE];
 
+// volatile uint8_t _ezlink[8];// = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
+// void pn532it(); // Interrupt routine.
 
 /**************************************************************************/
 /*! 
@@ -82,8 +84,9 @@ static inline uint8_t wirerecv(void)
     @param  reset     Location of the RSTPD_N pin
 */
 /**************************************************************************/
-OSHU_PN532_I2C::OSHU_PN532_I2C(uint8_t irq, uint8_t reset) {
+OSHU_PN532_I2C::OSHU_PN532_I2C(uint8_t irq, uint8_t reset, bool irqmode) {
 	_irq = irq;
+	_irqmode = irqmode;
 	_reset = reset;
 	pinMode(_irq, INPUT);
 	pinMode(_reset, OUTPUT);
@@ -95,7 +98,7 @@ OSHU_PN532_I2C::OSHU_PN532_I2C(uint8_t irq, uint8_t reset) {
     @brief  Initializes the OSHU_PN532 hardware (I2C)
 */
 /**************************************************************************/
-boolean OSHU_PN532_I2C::init() {
+bool OSHU_PN532_I2C::init( ) {
 
 	WIRE.begin();
 
@@ -157,11 +160,85 @@ boolean OSHU_PN532_I2C::init() {
 	// read data packet
 	wirereaddata(oshu_pn532_packetbuffer, 8);
 
-	return  (oshu_pn532_packetbuffer[6] == 0x15);
+	return  (oshu_pn532_packetbuffer[6] == 0x15 );//&& setupIRQMode());
 
 }
 
+// /**************************************************************************/
+// /*! 
+//     @brief  function to setup IRQ system for the library
+// */
+// /**************************************************************************/
+// bool OSHU_PN532_I2C::setupIRQMode( ) {
+// 	uint8_t inter = 0;
 
+// 	if (_irqmode) {
+
+// 		switch (_irq) {
+// 			case 2:
+// 				inter = 0;
+// 				break;
+// 			case 3:
+// 				inter = 1;
+// 				break;
+// 			case 21:
+// 				inter = 2;
+// 				break;
+// 			case 20:
+// 				inter = 3;
+// 				break;
+// 			case 19:
+// 				inter = 4;
+// 				break;
+// 			case 18:
+// 				inter = 5;
+// 				break;
+// 			default:
+// 				return false;
+// 				break;
+// 		}
+
+// 	}
+
+// 	if ( ! setupPN532ToDetectEZLinkCards() ) {
+
+// 		return false;
+
+// 	}
+
+// 	attachInterrupt(inter, pn532it, RISING);
+
+// 	return true;
+// }
+
+
+
+// void pn532it() {
+
+// 	Serial.println("IT");
+// /*
+// 	float balance;
+
+// 	if ( readEZLink( (uint8_t *)_ezlink, &balance ) ) {
+
+// 		//ezLinkAvailable = true;
+
+// 	} else {
+
+// 		//ezLinkAvailable = false;
+
+// 	}
+
+// 	setupPN532ToDetectEZLinkCards();
+// */
+// }
+
+/**************************************************************************/
+/*! 
+    @brief  Utility function to printout for debug
+*/
+/**************************************************************************/
+#ifdef OSHU_PN532_EZLINK_DEBUG
 char * print8bitHex(int num) {
 	char tmp[16];
 	char format[128];
@@ -169,6 +246,177 @@ char * print8bitHex(int num) {
 	sprintf(tmp, format, num);
 	return tmp;
 }
+#endif
+/*
+void OSHU_PN532_I2C::getEZLink(uint8_t * ezlink) {
+
+	memcpy(ezlink, _ezlink, 8);
+	ezLinkAvailable = false;
+
+}
+*/
+
+bool OSHU_PN532_I2C::setupPN532ToDetectEZLinkCards() {
+	oshu_pn532_packetbuffer[0] = PN532_COMMAND_INLISTPASSIVETARGET;
+	oshu_pn532_packetbuffer[1] = 0x01;
+	oshu_pn532_packetbuffer[2] = 0x03;
+	oshu_pn532_packetbuffer[3] = 0x00;
+
+	#ifdef OSHU_PN532_EZLINK_DEBUG 
+		Serial.println("OSHU_PN532_I2C::setupPN532ToDetectEZLinkCards: Searching for EZLink Cards around");
+	#endif
+	
+	if ( ! sendCommandCheckAck(oshu_pn532_packetbuffer, 4, 1000) ) {
+		
+		#ifdef OSHU_PN532_EZLINK_DEBUG
+			Serial.println("OSHU_PN532_I2C::setupPN532ToDetectEZLinkCards: ERROR - NP532 is not responding - ACK timedout");
+		#endif
+
+		return false;
+
+	} else {
+		// ACK received from PN532.
+		// Must wait now for IRQ to trigger.
+		return true;
+	}
+}
+
+bool OSHU_PN532_I2C::checkResponse( uint8_t expectedresponse, uint8_t extraparam ) {
+	if (
+		oshu_pn532_packetbuffer[0] == 0x00 &&
+		oshu_pn532_packetbuffer[1] == 0x00 &&
+		oshu_pn532_packetbuffer[2] == 0xFF &&
+		oshu_pn532_packetbuffer[4] == (uint8_t)(~oshu_pn532_packetbuffer[3] + 1) &&
+		oshu_pn532_packetbuffer[5] == PN532_PN532TOHOST &&
+		oshu_pn532_packetbuffer[6] == expectedresponse &&
+		oshu_pn532_packetbuffer[7] == extraparam
+		) {
+		return true;
+	}
+
+	return false;
+
+}
+
+bool OSHU_PN532_I2C::readEZLink(uint8_t * ezlink, float * balance) {
+	oshu_pn532_packetbuffer[0] = PN532_COMMAND_INDATAEXCHANGE;
+	oshu_pn532_packetbuffer[1] = 0x01;
+	oshu_pn532_packetbuffer[2] = 0x90;//144;//90;
+	oshu_pn532_packetbuffer[3] = 0x32;//50;//32;
+	oshu_pn532_packetbuffer[4] = 0x03;
+	oshu_pn532_packetbuffer[5] = 0x00;
+	oshu_pn532_packetbuffer[6] = 0x00;
+	oshu_pn532_packetbuffer[7] = 0x00;
+				
+	#ifdef OSHU_PN532_EZLINK_DEBUG 
+		Serial.println("OSHU_PN532_I2C::checkForEZLink: Request read EZLink Card data");
+	#endif
+			
+	if ( ! sendCommandCheckAck(oshu_pn532_packetbuffer, 8, 1000) ) {
+
+		#ifdef OSHU_PN532_EZLINK_DEBUG
+			Serial.println("OSHU_PN532_I2C::checkForEZLink: ERROR - NP532 is not responding - ACK timedout");
+		#endif
+
+		return false;
+
+	} else {
+
+		if ( ! waitUntilReady(1000) ) {
+
+			#ifdef OSHU_PN532_EZLINK_DEBUG
+				Serial.println("OSHU_PN532_I2C::checkForEZLink: ERROR - NP532 is not responding - Fail on IRQ");
+			#endif
+
+			return false;
+
+		} else {
+
+			wirereaddata(oshu_pn532_packetbuffer, OSHU_PN532_PACKBUFFSIZE);
+			
+			if ( ! checkResponse( PN532_RESPONSE_INDATAEXCHANGE, 0x00 ) ) {
+
+				#ifdef OSHU_PN532_EZLINK_DEBUG
+					Serial.println("OSHU_PN532_I2C::checkForEZLink: ERROR - Unexpected data read from EZLink.");
+				#endif
+
+				return false;
+
+			} else {
+								
+				#ifdef OSHU_PN532_EZLINK_DEBUG
+					Serial.println("OSHU_PN532_I2C::checkForEZLink: Correct response received.");
+				#endif
+
+				memcpy(ezlink, oshu_pn532_packetbuffer + 16, 8);
+				*balance = (float)(oshu_pn532_packetbuffer[11] * 256 + oshu_pn532_packetbuffer[12]) / 100;
+							
+				#ifdef OSHU_PN532_EZLINK_DEBUG
+					Serial.print("OSHU_PN532_I2C::checkForEZLink: EZLink CAN:");
+					for (int i = 0; i < 8; i ++) {
+						Serial.print(" "); Serial.print(print8bitHex(ezlink[i]));
+					}
+					Serial.print(" with balance of ");
+					Serial.println(*balance);
+				#endif
+							
+				oshu_pn532_packetbuffer[0] = PN532_COMMAND_INRELEASE;
+				oshu_pn532_packetbuffer[1] = 0x01;
+			
+				#ifdef OSHU_PN532_EZLINK_DEBUG 
+					Serial.println("OSHU_PN532_I2C::checkForEZLink: Request release of EZLink Card");
+				#endif
+			
+				if ( ! sendCommandCheckAck(oshu_pn532_packetbuffer, 2, 1000) ) {
+				
+					#ifdef OSHU_PN532_EZLINK_DEBUG
+						Serial.println("OSHU_PN532_I2C::checkForEZLink: ERROR - NP532 is not responding - ACK timedout");
+					#endif
+
+					return false;
+							
+				} else {
+							
+					if ( ! waitUntilReady(1000) ) {
+
+						#ifdef OSHU_PN532_EZLINK_DEBUG
+							Serial.println("OSHU_PN532_I2C::checkForEZLink: ERROR - NP532 is not responding - Fail on IRQ");
+						#endif
+
+						return false;
+
+					} else {
+
+						wirereaddata(oshu_pn532_packetbuffer, sizeof(oshu_pn532_packetbuffer));
+			
+						if ( ! checkResponse( PN532_RESPONSE_INRELEASE, 0x00 ) ) {
+
+							#ifdef OSHU_PN532_EZLINK_DEBUG
+								Serial.println("OSHU_PN532_I2C::checkForEZLink: ERROR - NP532 wrong response, but we don't care");
+							#endif
+
+						} else {
+
+							#ifdef OSHU_PN532_EZLINK_DEBUG
+								Serial.println("OSHU_PN532_I2C::checkForEZLink: Correct release response received.");
+								Serial.println(*balance);
+							#endif
+
+						}
+
+						return true;
+
+					}
+							
+				}
+
+			}
+
+		}
+
+	}
+}
+
 
 
 /**************************************************************************/
@@ -179,7 +427,7 @@ char * print8bitHex(int num) {
     @param  
 */
 /**************************************************************************/
-boolean OSHU_PN532_I2C::checkForEZLink_NonBlocking(uint8_t * ezlink, float * balance) {
+bool OSHU_PN532_I2C::checkForEZLink_NonBlocking(uint8_t * ezlink, float * balance) {
 
 	static uint8_t checkForEZLink_state = 0;
 
@@ -187,27 +435,10 @@ boolean OSHU_PN532_I2C::checkForEZLink_NonBlocking(uint8_t * ezlink, float * bal
 		case 0: {
 			// First call => Init
 			// Setup the reader to IRQ on detection of a card.
-			oshu_pn532_packetbuffer[0] = PN532_COMMAND_INLISTPASSIVETARGET;
-			oshu_pn532_packetbuffer[1] = 0x01;
-			oshu_pn532_packetbuffer[2] = 0x03;
-			oshu_pn532_packetbuffer[3] = 0x00;
-
-			#ifdef OSHU_PN532_EZLINK_DEBUG 
-				Serial.println("OSHU_PN532_I2C::checkForEZLink: Searching for EZLink Cards around");
-			#endif
-			
-			if ( ! sendCommandCheckAck(oshu_pn532_packetbuffer, 4, 1000) ) {
-				
-				#ifdef OSHU_PN532_EZLINK_DEBUG
-					Serial.println("OSHU_PN532_I2C::checkForEZLink: ERROR - NP532 is not responding - ACK timedout");
-				#endif
-
-				checkForEZLink_state = 0;
-
-			} else {
-				// ACK received from PN532.
-				// Must wait now for IRQ to trigger.
+			if ( setupPN532ToDetectEZLinkCards() ) {
 				checkForEZLink_state = 1;
+			} else {
+				checkForEZLink_state = 0;
 			}
 			} break;
 		case 1: {
@@ -223,15 +454,7 @@ boolean OSHU_PN532_I2C::checkForEZLink_NonBlocking(uint8_t * ezlink, float * bal
 			// Check for EZLink, if fail, revert to state 0.
 			wirereaddata(oshu_pn532_packetbuffer, OSHU_PN532_PACKBUFFSIZE);
 
-			if ( ! (
-				oshu_pn532_packetbuffer[0] == 0x00 &&
-				oshu_pn532_packetbuffer[1] == 0x00 &&
-				oshu_pn532_packetbuffer[2] == 0xFF &&
-				oshu_pn532_packetbuffer[4] == (uint8_t)(~oshu_pn532_packetbuffer[3] + 1) &&
-				oshu_pn532_packetbuffer[5] == PN532_PN532TOHOST &&
-				oshu_pn532_packetbuffer[6] == PN532_RESPONSE_INLISTPASSIVETARGET &&
-				oshu_pn532_packetbuffer[7] == 0x01
-				) ) {
+			if ( ! checkResponse( PN532_RESPONSE_INLISTPASSIVETARGET, 0x01 ) ) {
 
 				#ifdef OSHU_PN532_EZLINK_DEBUG
 					Serial.println("OSHU_PN532_I2C::checkForEZLink: NP532 found something else than EZLink or more than 1");
@@ -245,6 +468,12 @@ boolean OSHU_PN532_I2C::checkForEZLink_NonBlocking(uint8_t * ezlink, float * bal
 					Serial.println("OSHU_PN532_I2C::checkForEZLink: NP532 found an EZLink");
 				#endif
 				
+				checkForEZLink_state = 0;
+
+				if ( readEZLink(ezlink, balance) ) {
+					return true;
+				}
+/*
 				oshu_pn532_packetbuffer[0] = PN532_COMMAND_INDATAEXCHANGE;
 				oshu_pn532_packetbuffer[1] = 0x01;
 				oshu_pn532_packetbuffer[2] = 0x90;//144;//90;
@@ -380,6 +609,8 @@ boolean OSHU_PN532_I2C::checkForEZLink_NonBlocking(uint8_t * ezlink, float * bal
 
 				}
 
+				*/
+
 			}
 
 			} break;
@@ -412,19 +643,14 @@ boolean OSHU_PN532_I2C::checkForEZLink_NonBlocking(uint8_t * ezlink, float * bal
 */
 /**************************************************************************/
 // default timeout of one second
-boolean OSHU_PN532_I2C::sendCommandCheckAck(uint8_t *cmd, uint8_t cmdlen, uint16_t timeout) {
+bool OSHU_PN532_I2C::sendCommandCheckAck(uint8_t *cmd, uint8_t cmdlen, uint16_t timeout) {
 	uint16_t timer = 0;
 
 	// write the command
 	wiresendcommand(cmd, cmdlen);
 
-	// Wait for chip to say its ready!
-	while (wirereadstatus() != PN532_I2C_READY) {
-		if (timeout != 0) {
-			timer+=10;
-			if (timer > timeout) return false;
-		}
-		delay(10);
+	if ( ! waitUntilReady(timeout) ) {
+		return false;
 	}
 
 	#ifdef OSHU_PN532_LOWLEVEL_DEBUG
@@ -432,7 +658,7 @@ boolean OSHU_PN532_I2C::sendCommandCheckAck(uint8_t *cmd, uint8_t cmdlen, uint16
 	#endif
 
 	// read acknowledgement
-	if (!readackframe()) {
+	if ( ! readackframe() ) {
 		#ifdef OSHU_PN532_LOWLEVEL_DEBUG
 			Serial.println("No ACK frame received!");
 		#endif
@@ -448,7 +674,7 @@ boolean OSHU_PN532_I2C::sendCommandCheckAck(uint8_t *cmd, uint8_t cmdlen, uint16
           the I2C ACK signal)
 */
 /**************************************************************************/
-boolean OSHU_PN532_I2C::readackframe(void) {
+bool OSHU_PN532_I2C::readackframe(void) {
   uint8_t ackbuff[6];
   
   wirereaddata(ackbuff, 6);
@@ -578,7 +804,7 @@ void OSHU_PN532_I2C::wiresendcommand(uint8_t* cmd, uint8_t cmdlen) {
     @param  timeout   Timeout before giving up
 */
 /**************************************************************************/
-boolean OSHU_PN532_I2C::waitUntilReady(uint16_t timeout) {
+bool OSHU_PN532_I2C::waitUntilReady(uint16_t timeout) {
 	uint16_t timer = 0;
 	while(wirereadstatus() != PN532_I2C_READY) {
 		if (timeout != 0) {
